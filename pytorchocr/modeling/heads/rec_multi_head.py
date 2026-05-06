@@ -21,6 +21,16 @@ class FCTranspose(nn.Module):
 
 
 class MultiHead(nn.Module):
+    # Used by PP-OCRv5_server_rec (algorithm: SVTR_HGNet).
+    # At training time two branches run: CTC (primary) + NRTR (guidance/distillation).
+    # At inference only the CTC branch is active (NRTRHead is currently commented out
+    # in __init__, so self.gtc_head stays as the string 'sar' and is never called).
+    #
+    # Submodules that matter for inference / LoRA:
+    #   self.ctc_encoder  – EncoderWithSVTR  (SVTR transformer neck + Im2Seq)
+    #                        [B,2048,1,40] → [B,40,120]
+    #   self.ctc_head     – CTCHead  (single Linear 120 → n_char)
+    #                        [B,40,120] → [B,40,n_char]
     def __init__(self, in_channels, out_channels_list, **kwargs):
         super().__init__()
         self.head_list = kwargs.pop('head_list')
@@ -36,6 +46,8 @@ class MultiHead(nn.Module):
                 # self.sar_head = eval(name)(in_channels=in_channels, \
                 #                            out_channels=out_channels_list['SARLabelDecode'], **sar_args)
             elif name == 'NRTRHead':
+                # NRTRHead (cross-attention decoder) is used only as a training-time
+                # guidance signal; it is disabled here for inference efficiency.
                 pass
                 # gtc_args = self.head_list[idx][name]
                 # max_text_length = gtc_args.get('max_text_length', 25)
@@ -53,13 +65,13 @@ class MultiHead(nn.Module):
                 #     dim_feedforward=nrtr_dim * 4,
                 #     out_channels=out_channels_list['NRTRLabelDecode'])
             elif name == 'CTCHead':
-                # ctc neck
+                # ctc neck: EncoderWithSVTR → Im2Seq  (see necks/rnn.py)
                 self.encoder_reshape = Im2Seq(in_channels)
                 neck_args = self.head_list[idx][name]['Neck']
-                encoder_type = neck_args.pop('name')
+                encoder_type = neck_args.pop('name')  # 'svtr'
                 self.ctc_encoder = SequenceEncoder(in_channels=in_channels, \
                                                    encoder_type=encoder_type, **neck_args)
-                # ctc head
+                # ctc head: single Linear (out_channels = n_char)
                 head_args = self.head_list[idx][name].get('Head', {})
                 if head_args is None:
                     head_args = {}

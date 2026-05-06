@@ -987,8 +987,8 @@ class ConvBNAct(TheseusLayer):
         lr_mult=1.0,
     ):
         super().__init__()
-        self.use_act = use_act
-        self.use_lab = use_lab
+        self.use_act = use_act # Whether to use activation function.
+        self.use_lab = use_lab # Whether to use the LAB operation.
         self.conv = nn.Conv2d(
             in_channels,
             out_channels,
@@ -1161,6 +1161,12 @@ class StemBlock(TheseusLayer):
 class HGV2_Block(TheseusLayer):
     """
     HGV2_Block, the basic unit that constitutes the HGV2_Stage.
+    Dense feature aggregation: input is fed through `layer_num` conv layers,
+    all intermediate outputs are concatenated with the input, then squeezed
+    back to out_channels via two 1×1 convs (squeeze + excitation).
+    When identity=True a residual shortcut is added (same as ResNet skip).
+    For text_rec B4: stages 1-2 use ConvBNAct (light_block=False),
+    stages 3-4 use LightConvBNAct (pw+dw, light_block=True).
 
     Args:
         in_channels (int): Number of input channels.
@@ -1334,27 +1340,27 @@ class PPHGNetV2(TheseusLayer):
         class_expand=2048,
         dropout_prob=0.0,
         class_num=1000,
-        lr_mult_list=[1.0, 1.0, 1.0, 1.0, 1.0],
+        lr_mult_list=[1.0, 1.0, 1.0, 1.0, 1.0],#  Learning rate multiplier for the stages.
         det=False,
         text_rec=False,
         out_indices=None,
         **kwargs,
     ):
         super().__init__()
-        self.det = det
-        self.text_rec = text_rec
-        self.use_lab = use_lab
-        self.use_last_conv = use_last_conv
-        self.class_expand = class_expand
-        self.class_num = class_num
+        self.det = det # set to false
+        self.text_rec = text_rec # set to true
+        self.use_lab = use_lab # set to false
+        self.use_last_conv = use_last_conv # Whether to use the last conv layer as the output channel
+        self.class_expand = class_expand ## # Number of channels for the last 1x1 convolutional layer
+        self.class_num = class_num # number of classes that are going to be used
         self.out_indices = out_indices if out_indices is not None else [0, 1, 2, 3]
         self.out_channels = []
 
         # stem
         self.stem = StemBlock(
-            in_channels=stem_channels[0],
-            mid_channels=stem_channels[1],
-            out_channels=stem_channels[2],
+            in_channels=stem_channels[0],#
+            mid_channels=stem_channels[1],#
+            out_channels=stem_channels[2],#
             use_lab=use_lab,
             lr_mult=lr_mult_list[0],
             text_rec=text_rec,
@@ -1440,6 +1446,8 @@ class PPHGNetV2(TheseusLayer):
         if self.det:
             return out
 
+        # After stage4 x is [B, 2048, 3, 80].
+        # Pool height=3→1, width 80→40 to get the 40-step CTC sequence.
         if self.text_rec:
             if self.training:
                 x = F.adaptive_avg_pool2d(x, [1, 40])
@@ -1554,6 +1562,13 @@ def PPHGNetV2_B4(pretrained=False, use_ssld=False, det=False, text_rec=False, **
     Returns:
         model: nn.Module. Specific `PPHGNetV2_B4` model depends on args.
     """
+    # For text recognition (text_rec=True) the stride pattern preserves the width
+    # dimension longer so the model can read character sequences left-to-right.
+    # Stride format: [height_stride, width_stride] per stage.
+    # After StemBlock (text_rec → stem3 stride=1): [B, 48, 24, 160]
+    # Stage1 [2,1]: [B,128,12,160]  Stage2 [1,2]: [B,512,12,80]
+    # Stage3 [2,1]: [B,1024,6,80]   Stage4 [2,1]: [B,2048,3,80]
+    # Final avg_pool([3,2]) → [B,2048,1,40]  (40 = the sequence length for CTC)
     stage_config_rec = {
         # in_channels, mid_channels, out_channels, num_blocks, is_downsample, light_block, kernel_size, layer_num, stride
         "stage1": [48, 48, 128, 1, True, False, 3, 6, [2, 1]],

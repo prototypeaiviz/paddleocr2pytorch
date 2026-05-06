@@ -10,6 +10,10 @@ from pytorchocr.modeling.necks import build_neck
 from pytorchocr.modeling.heads import build_head
 
 class BaseModel(nn.Module):
+    # Pipeline: Transform (optional) → Backbone → Neck (optional) → Head
+    # For PP-OCRv5_server_rec: no Transform, Backbone=PPHGNetV2_B4,
+    # no top-level Neck (the SVTR neck is embedded inside MultiHead/CTCHead),
+    # Head=MultiHead.
     def __init__(self, config, **kwargs):
         """
         the module for OCR.
@@ -87,10 +91,12 @@ class BaseModel(nn.Module):
 
 
     def forward(self, x):
+        # x: [B, 3, 48, 320] for PP-OCRv5_server_rec
         y = dict()
         if self.use_transform:
             x = self.transform(x)
         if self.use_backbone:
+            # PPHGNetV2_B4: [B,3,48,320] → [B,2048,1,40]
             x = self.backbone(x)
         if isinstance(x, dict):
             y.update(x)
@@ -105,6 +111,7 @@ class BaseModel(nn.Module):
                 y["neck_out"] = x
             final_name = "neck_out"
         if self.use_head:
+            # MultiHead: [B,2048,1,40] → at inference returns ctc logits [B,40,n_char]
             x = self.head(x)
         # for multi head, save ctc neck out for udml
         if isinstance(x, dict) and 'ctc_nect' in x.keys():

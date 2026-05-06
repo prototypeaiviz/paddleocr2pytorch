@@ -4,6 +4,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class CTCHead(nn.Module):
+    # Final classification layer for CTC decoding.
+    # For PP-OCRv5_server_rec: in_channels=120 (from EncoderWithSVTR dims),
+    # out_channels=n_char (vocab size + 1 blank + 1 space).
+    # At inference applies softmax so CTCLabelDecode gets probabilities.
+    # mid_channels=None → single Linear(120→n_char).  ← LoRA target: self.fc
     def __init__(self,
                  in_channels,
                  out_channels=6625,

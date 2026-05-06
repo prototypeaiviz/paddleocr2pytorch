@@ -60,6 +60,33 @@ class EncoderWithFC(nn.Module):
 
 
 class EncoderWithSVTR(nn.Module):
+    # Lightweight transformer neck used inside MultiHead for PP-OCRv5.
+    # Takes the 2D feature map from the backbone, applies global self-attention
+    # over all spatial positions, then merges the attended features back with
+    # the original map via a guide shortcut before flattening to a sequence.
+    #
+    # For PP-OCRv5_server_rec the config is:
+    #   in_channels=2048, dims=120, depth=2, hidden_dims=120,
+    #   kernel_size=[1,3], use_guide=True
+    #
+    # Shape trace (inference):
+    #   in:      [B, 2048, 1, 40]
+    #   conv1:   [B,  256, 1, 40]   ConvBN(2048→256, k=[1,3], swish)
+    #   conv2:   [B,  120, 1, 40]   ConvBN(256→120,  k=1,     swish)
+    #   flatten: [B,   40, 120]
+    #   blocks:  [B,   40, 120]     2× SVTR Global Block (see rec_svtrnet.py::Block)
+    #   norm:    [B,   40, 120]     LayerNorm
+    #   conv3:   [B, 2048, 1, 40]   ConvBN(120→2048, k=1, swish)  – restore channels
+    #   cat:     [B, 4096, 1, 40]   cat(guide h, conv3)  – guide shortcut
+    #   conv4:   [B,  256, 1, 40]   ConvBN(4096→256, k=3)
+    #   conv1x1: [B,  120, 1, 40]   ConvBN(256→dims=120, k=1)
+    #   Im2Seq:  [B,   40, 120]     squeeze H=1, permute → sequence for CTC
+    #
+    # LoRA targets inside the SVTR blocks (indexed as svtr_block[i]):
+    #   .mixer.qkv   Linear(120→360)   key/query/value projection
+    #   .mixer.proj  Linear(120→120)   output projection
+    #   .mlp.fc1     Linear(120→240)   MLP expand
+    #   .mlp.fc2     Linear(240→120)   MLP contract
     def __init__(
             self,
             in_channels,
@@ -138,30 +165,30 @@ class EncoderWithSVTR(nn.Module):
             nn.init.zeros_(m.bias)
 
     def forward(self, x):
-        # for use guide
+        # use_guide=True: keep a detached copy of the backbone output as the
+        # shortcut (guide) so gradients don't flow back through it a second time.
         if self.use_guide:
             z = x.clone()
             z.stop_gradient = True
         else:
             z = x
-        # for short cut
-        h = z
-        # reduce dim
+        h = z  # shortcut for the residual merge at the end
+        # Reduce channels so the transformer runs on a compact dim (hidden_dims=120)
         z = self.conv1(z)
         z = self.conv2(z)
-        # SVTR global block
+        # Flatten spatial dims and run global self-attention
         B, C, H, W = z.shape
-        z = z.flatten(2).permute(0, 2, 1)
+        z = z.flatten(2).permute(0, 2, 1)  # [B, H*W, C]
 
         for blk in self.svtr_block:
             z = blk(z)
 
         z = self.norm(z)
-        # last stage
+        # Restore spatial layout, project back to in_channels, merge with guide
         z = z.reshape([-1, H, W, C]).permute(0, 3, 1, 2)
         z = self.conv3(z)
-        z = torch.cat((h, z), dim=1)
-        z = self.conv1x1(self.conv4(z))
+        z = torch.cat((h, z), dim=1)   # [B, 2*in_channels, H, W]
+        z = self.conv1x1(self.conv4(z))  # → [B, dims, H, W]
 
         return z
 
