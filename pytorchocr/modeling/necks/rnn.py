@@ -60,6 +60,9 @@ class EncoderWithFC(nn.Module):
         return x
 
 # USED THIS is the one used
+"""
+
+"""
 class EncoderWithSVTR(nn.Module):
     # Lightweight transformer neck used inside MultiHead for PP-OCRv5.
     # Takes the 2D feature map from the backbone, applies global self-attention
@@ -104,47 +107,56 @@ class EncoderWithSVTR(nn.Module):
             drop_path=0.,
             qk_scale=None):
         super(EncoderWithSVTR, self).__init__()
-        self.depth = depth
-        self.use_guide = use_guide
+        self.depth = depth # depth is 2
+        self.use_guide = use_guide # set to True
         self.conv1 = ConvBNLayer(
-            in_channels,
+            in_channels,#2048
             in_channels // 8,
-            kernel_size=kernel_size,
+            kernel_size=kernel_size,# [1,3]
             padding=[kernel_size[0] // 2, kernel_size[1] // 2],
             act='swish')
         self.conv2 = ConvBNLayer(
-            in_channels // 8, hidden_dims, kernel_size=1, act='swish')
-
+            in_channels // 8,
+            hidden_dims,
+            kernel_size=1,
+            act='swish')
+            # hidden dims 120
+            # kernel size 1
         self.svtr_block = nn.ModuleList([
             Block(
-                dim=hidden_dims,
-                num_heads=num_heads,
+                dim=hidden_dims,#120
+                num_heads=num_heads,#8
                 mixer='Global',
                 HW=None,
-                mlp_ratio=mlp_ratio,
-                qkv_bias=qkv_bias,
-                qk_scale=qk_scale,
-                drop=drop_rate,
+                mlp_ratio=mlp_ratio,#2.0
+                qkv_bias=qkv_bias,#True
+                qk_scale=qk_scale,# None
+                drop=drop_rate,#0.1
                 act_layer='swish',
-                attn_drop=attn_drop_rate,
-                drop_path=drop_path,
+                attn_drop=attn_drop_rate,# 0.1
+                drop_path=drop_path,#0.0
                 norm_layer='nn.LayerNorm',
                 epsilon=1e-05,
-                prenorm=False) for i in range(depth)
+                prenorm=False) for i in range(depth)# depth is set to 2
         ])
-        self.norm = nn.LayerNorm(hidden_dims, eps=1e-6)
+        self.norm = nn.LayerNorm(hidden_dims, eps=1e-6)#120
         self.conv3 = ConvBNLayer(
             hidden_dims, in_channels, kernel_size=1, act='swish')
+        # in channels 2048
         # last conv-nxn, the input is concat of input tensor and conv3 output tensor
         self.conv4 = ConvBNLayer(
             2 * in_channels, in_channels // 8, padding=1, act='swish')
+        # go up from 2048*2 then go to 256
 
         self.conv1x1 = ConvBNLayer(
-            in_channels // 8, dims, kernel_size=1, act='swish')
-        self.out_channels = dims
+            in_channels // 8, dims, kernel_size=1, act='swish')#120
+        self.out_channels = dims#120
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
+        """
+        Interesting information about init weights
+        """
         # weight initialization
         if isinstance(m, nn.Conv2d):
             nn.init.kaiming_normal_(m.weight, mode='fan_out')
