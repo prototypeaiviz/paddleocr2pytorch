@@ -45,6 +45,7 @@ def build_head(config, **kwargs):
     from .table_att_head import TableAttentionHead
 
     module_name = config.pop('name')
+    # they are using MultiHead
     assert module_name in support_dict, Exception('head only support {}'.format(
         support_dict))
     module_class = eval(module_name)(**config, **kwargs)

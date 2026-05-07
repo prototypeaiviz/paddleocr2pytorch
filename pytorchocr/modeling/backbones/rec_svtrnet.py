@@ -17,7 +17,7 @@ def drop_path(x, drop_prob=0., training=False):
     output = x.divide(keep_prob) * random_tensor
     return output
 
-
+# USED
 class ConvBNLayer(nn.Module):
     def __init__(self,
                  in_channels,
@@ -46,7 +46,7 @@ class ConvBNLayer(nn.Module):
         out = self.act(out)
         return out
 
-
+# USED
 class DropPath(nn.Module):
     """Drop paths (Stochastic Depth) per sample  (when applied in main path of residual blocks).
     """
@@ -90,7 +90,7 @@ class Mlp(nn.Module):
         x = self.drop(x)
         return x
 
-
+# USED
 class ConvMixer(nn.Module):
     def __init__(
             self,
@@ -117,7 +117,7 @@ class ConvMixer(nn.Module):
         x = x.flatten(2).permute(0, 2, 1)
         return x
 
-
+# USED
 class Attention(nn.Module):
     def __init__(self,
                  dim,

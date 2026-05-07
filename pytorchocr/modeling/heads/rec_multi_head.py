@@ -19,7 +19,7 @@ class FCTranspose(nn.Module):
         else:
             return self.fc(x.permute([0, 2, 1]))
 
-
+# They are using this one
 class MultiHead(nn.Module):
     # Used by PP-OCRv5_server_rec (algorithm: SVTR_HGNet).
     # At training time two branches run: CTC (primary) + NRTR (guidance/distillation).
@@ -65,16 +65,19 @@ class MultiHead(nn.Module):
                 #     dim_feedforward=nrtr_dim * 4,
                 #     out_channels=out_channels_list['NRTRLabelDecode'])
             elif name == 'CTCHead':
+                # CTCHead (always active): CTC is the primary output
                 # ctc neck: EncoderWithSVTR → Im2Seq  (see necks/rnn.py)
-                self.encoder_reshape = Im2Seq(in_channels)
+                self.encoder_reshape = Im2Seq(in_channels)# — squeezes height, permutes to [B, W, C]
                 neck_args = self.head_list[idx][name]['Neck']
-                encoder_type = neck_args.pop('name')  # 'svtr'
+                encoder_type = neck_args.pop('name') # the stype is svtr # 'svtr'
                 self.ctc_encoder = SequenceEncoder(in_channels=in_channels, \
                                                    encoder_type=encoder_type, **neck_args)
+                # handles SVTR transformer above in the ctc
                 # ctc head: single Linear (out_channels = n_char)
                 head_args = self.head_list[idx][name].get('Head', {})
                 if head_args is None:
                     head_args = {}
+                # Call the ctc head
                 self.ctc_head = eval(name)(in_channels=self.ctc_encoder.out_channels, \
                                            out_channels=out_channels_list['CTCLabelDecode'], **head_args)
             else:
@@ -82,16 +85,20 @@ class MultiHead(nn.Module):
                     '{} is not supported in MultiHead yet'.format(name))
 
     def forward(self, x, data=None):
+        # input is 1,20248,1,40 this is the input size
         ctc_encoder = self.ctc_encoder(x)
+        # the above output is size of [1,40,120]
         ctc_out = self.ctc_head(ctc_encoder)
         head_out = dict()
         head_out['ctc'] = ctc_out
         head_out['res'] = ctc_out
         head_out['ctc_neck'] = ctc_encoder
-        # eval mode
+        # eval mode so we are not training
         if not self.training:
             return ctc_out
+        # here this problem related to training
         if self.gtc_head == 'sar':
+            # you enter into here also
             sar_out = self.sar_head(x, data[1:])['res']
             head_out['sar'] = sar_out
         else:

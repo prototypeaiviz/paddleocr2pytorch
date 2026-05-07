@@ -961,7 +961,7 @@ class LearnableAffineBlock(TheseusLayer):
 class ConvBNAct(TheseusLayer):
     """
     ConvBNAct is a combination of convolution and batchnorm layers.
-
+ConvBNAct: 73,728
     Args:
         in_channels (int): Number of input channels.
         out_channels (int): Number of output channels.
@@ -989,6 +989,8 @@ class ConvBNAct(TheseusLayer):
         super().__init__()
         self.use_act = use_act # Whether to use activation function.
         self.use_lab = use_lab # Whether to use the LAB operation.
+        # One big convolution that transforms directly from in_channels to out_channels
+        # If in=64 and out=128, the conv has 64 × 128 × 3 × 3 = 73,728 parameters (for a 3×3 kernel)
         self.conv = nn.Conv2d(
             in_channels,
             out_channels,
@@ -997,7 +999,7 @@ class ConvBNAct(TheseusLayer):
             padding=padding if isinstance(padding, str) else (kernel_size - 1) // 2,
             groups=groups,
             bias=False,
-        )
+        )# it go up from 3 to 32
         self.bn = nn.BatchNorm2d(
             out_channels,
         )
@@ -1019,13 +1021,15 @@ class ConvBNAct(TheseusLayer):
 class LightConvBNAct(TheseusLayer):
     """
     LightConvBNAct is a combination of pw and dw layers.
-
+8,192 + 1,152 = 9,344
     Args:
         in_channels (int): Number of input channels.
         out_channels (int): Number of output channels.
         kernel_size (int): Size of the depth-wise convolution kernel.
         use_lab (bool): Whether to use the LAB operation. Defaults to False.
         lr_mult (float): Learning rate multiplier for the layer. Defaults to 1.0.
+        # 8,192 + 1,152 = 9,344
+    🎯 When to Use Each
     """
 
     def __init__(
@@ -1037,7 +1041,12 @@ class LightConvBNAct(TheseusLayer):
         lr_mult=1.0,
         **kwargs,
     ):
+
         super().__init__()
+        # pointwise 1 by 1: Pointwise (1×1) = Mix channels without spatial complexity
+            # Takes in_channels=64 → out_channels=128
+            # Uses 1×1 kernels: 64 × 128 × 1 × 1 = 8,192 parameters ✅ Much smaller!
+            # No spatial complexity (no moving window, just channel mixing)
         self.conv1 = ConvBNAct(
             in_channels=in_channels,
             out_channels=out_channels,
@@ -1046,6 +1055,11 @@ class LightConvBNAct(TheseusLayer):
             use_lab=use_lab,
             lr_mult=lr_mult,
         )
+        # Depthwise Convolution : Depthwise (k×k) = Process spatial patterns per channel independently
+            # Each of the 128 channels processes itself independently
+            # 128 groups × 1 × kernel_size × kernel_size parameters
+            # For a 3×3 kernel: 128 × 1 × 3 × 3 = 1,152 parameters ✅ Tiny!
+            # groups=out_channels means each channel gets its own 3×3 filter
         self.conv2 = ConvBNAct(
             in_channels=out_channels,
             out_channels=out_channels,
@@ -1055,26 +1069,83 @@ class LightConvBNAct(TheseusLayer):
             use_lab=use_lab,
             lr_mult=lr_mult,
         )
-
+        # Instead of mixing spatial and channels at once (expensive), you separate them (cheap).
     def forward(self, x):
         x = self.conv1(x)
         x = self.conv2(x)
         return x
-
-
+"""
+When to Use ConvBNAct vs LightConvBNAct - Detailed Guide
+Use Case                        | Pick                  | Why
+--------------------------------|----------------------|---------------------------------------------
+Early/initial layers            | Standard ConvBNAct    | Need rich spatial-channel mixing for raw input
+Mid-range layers                | Either (flexible)     | Depends on accuracy vs speed trade-off
+Deep/final layers               | LightConvBNAct        | Speed matters, features are already learned
+Real-time inference             | LightConvBNAct        | Lower latency crucial
+Mobile/edge devices             | LightConvBNAct        | Memory and compute severely restricted
+High-accuracy tasks             | ConvBNAct             | Slight expressiveness advantage
+Text recognition (like OCR)     | LightConvBNAct        | Fast inference, lower memory footprint
+Detection tasks                 | Mixed (both)          | Early stages: standard, later: light
+Video processing                | LightConvBNAct        | Must process frames quickly
+Training speed priority         | LightConvBNAct        | Fewer parameters = faster training
+Model size priority             | LightConvBNAct        | 8× fewer parameters
+Accuracy priority               | ConvBNAct             | More expressive mixing
+"""
 class PaddingSameAsPaddleMaxPool2d(torch.nn.Module):
     def __init__(self, kernel_size, stride=1):
+        """
+        what does this Class Does?
+            Applies MaxPool2d while preserving input dimensions (like padding="same" in Keras). The input shape stays the same after the operation.
+            Why? Without this, MaxPool shrinks the feature map. This class prevents that shrinkage by padding with zeros first
+            PyTorch's built-in MaxPool2d doesn't have a "same" mode. This custom class reimplements it by:
+                1. Manually calculating the exact padding needed
+                2. Pre-padding with torch.nn.functional.pad()
+                3. Running MaxPool2d with padding=0 (no double-padding)
+        In Your StemBlock Context
+        When you call self.pool = PaddingSameAsPaddleMaxPool2d(kernel_size=2, stride=1), it:
+            Takes input of shape e.g., (batch, 32, H, W)
+            Pads it (possibly asymmetrically) to ensure output = input size
+        Outputs (batch, 32, H, W) — same spatial dimensions
+            This is why the comment says "Size preserved" — the padding class ensures MaxPool doesn't shrink the feature map, which is critical when you're concatenating it with other paths that also preserve size.
+        """
         super().__init__()
         self.kernel_size = kernel_size
         self.stride = stride
         self.pool = torch.nn.MaxPool2d(kernel_size, stride, padding=0, ceil_mode=True)
+        # This stores the kernel size and stride,
+        # then creates a MaxPool2d with padding=0.
+        # The key is we'll manually add padding before calling this pool.
 
     def forward(self, x):
         _, _, h, w = x.shape
-        pad_h_total = max(0, (math.ceil(h / self.stride) - 1) * self.stride + self.kernel_size - h)
-        pad_w_total = max(0, (math.ceil(w / self.stride) - 1) * self.stride + self.kernel_size - w)
+        # Extract height and width from the input tensor. The first two dims are batch and channels (ignored).
+        # STEP 1: How many output positions will MaxPool create?
+        out_h = math.ceil(h / self.stride)
+        # STEP 2: Where is the last output position?
+        last_pos_h = (out_h - 1) * self.stride
+        # STEP 3: Extend by kernel size (to see where the kernel touches the edge)
+        extended_h = last_pos_h + self.kernel_size
+        # STEP 4: How much padding is needed?
+        pad_needed_h = extended_h - h
+        # STEP 5: Make sure it's not negative
+        pad_h_total = max(0, pad_needed_h)
+        # STEP 1: How many output positions will MaxPool create?
+        out_w = math.ceil(w / self.stride)
+
+        # STEP 2: Where is the last output position?
+        last_pos_w = (out_w - 1) * self.stride
+
+        # STEP 3: Extend by kernel size (where does the kernel reach?)
+        extended_w = last_pos_w + self.kernel_size
+
+        # STEP 4: How much padding is needed?
+        pad_needed_w = extended_w - w
+
+        # STEP 5: Make sure it's not negative
+        pad_w_total = max(0, pad_needed_w)
         pad_h = pad_h_total // 2
         pad_w = pad_w_total // 2
+        # The padding format is [left, right, top, bottom] in PyTorch.
         x = torch.nn.functional.pad(x, [pad_w, pad_w_total - pad_w, pad_h, pad_h_total - pad_h])
         return self.pool(x)
 
@@ -1099,6 +1170,22 @@ class StemBlock(TheseusLayer):
         lr_mult=1.0,
         text_rec=False,
     ):
+        """
+        Understanding Each Layer in Your StemBlock
+            Kernel Size determines the receptive field — how much context each output value "sees". A 3×3 kernel looks at 9 input values, a 2×2 kernel looks at 4.
+            Stride controls how much the kernel moves each step:
+                Stride = 1: kernel moves 1 pixel, output is nearly the same size as input (minus edges)
+                Stride = 2: kernel moves 2 pixels, output is roughly half the input size
+            Padding adds zero borders around the input:
+                Padding = 1 (or calculated): edges are padded, so output can be larger
+                Padding = "same": PyTorch automatically calculates padding to preserve spatial dimensions
+        you have to understand the big picture
+        The Big Picture
+            Your StemBlock is a multi-path feature extractor:
+            * One path uses small kernels (2×2) with stride=1 — captures fine detail at full resolution
+            * Another path uses MaxPool — captures dominant features
+            * Both paths concatenate and merge through stem3/stem4
+        """
         super().__init__()
         self.stem1 = ConvBNAct(
             in_channels=in_channels,
@@ -1108,6 +1195,9 @@ class StemBlock(TheseusLayer):
             use_lab=use_lab,
             lr_mult=lr_mult,
         )
+        # This is aggressive downsampling. Takes a large input image and cuts it to half size while computing features
+        # Comments say "go from 3 to 32" — meaning 3 color channels → 32 feature maps
+        # go from 3 to 32
         self.stem2a = ConvBNAct(
             in_channels=mid_channels,
             out_channels=mid_channels // 2,
@@ -1117,6 +1207,9 @@ class StemBlock(TheseusLayer):
             use_lab=use_lab,
             lr_mult=lr_mult,
         )
+        # Small kernel, no downsampling. It extracts details at the current resolution
+        # Reduces channels: 32 → 16 (the comment "from 32 to 16" is correct here)
+        # got from 32 to 16
         self.stem2b = ConvBNAct(
             in_channels=mid_channels // 2,
             out_channels=mid_channels,
@@ -1126,6 +1219,9 @@ class StemBlock(TheseusLayer):
             use_lab=use_lab,
             lr_mult=lr_mult,
         )
+        # Same size kernel as stem2a but expands channels back: 16 → 32
+        # This creates a bottleneck pathway: you compress features then expand them
+        # got from 16 to 32
         self.stem3 = ConvBNAct(
             in_channels=mid_channels * 2,
             out_channels=mid_channels,
@@ -1134,6 +1230,9 @@ class StemBlock(TheseusLayer):
             use_lab=use_lab,
             lr_mult=lr_mult,
         )
+        # Combines the two paths (stem2a→2b and pool were concatenated on channels)
+        # The comment "combine both together" is the key — two different feature extraction paths are merged
+        # combine
         self.stem4 = ConvBNAct(
             in_channels=mid_channels,
             out_channels=out_channels,
@@ -1142,9 +1241,14 @@ class StemBlock(TheseusLayer):
             use_lab=use_lab,
             lr_mult=lr_mult,
         )
+        # "1 by 1 kernel" — this looks at single pixels and mixes channels
+        # Often used to adjust channels or add learnable nonlinearity without changing spatial dimensions
+        # 1 by 1 kernel
         self.pool = PaddingSameAsPaddleMaxPool2d(
             kernel_size=2, stride=1,
         )
+        # Takes the maximum value in each 2×2 window (a different operation than convolution)
+        # Preserves important features, roughly the same output size
 
     def forward(self, x):
         x = self.stem1(x)
@@ -1152,7 +1256,10 @@ class StemBlock(TheseusLayer):
         x2 = self.stem2b(x2)
         x1 = self.pool(x)
         x = torch.cat([x1, x2], 1)
+        # combine both togather
         x = self.stem3(x)
+        # Combines the two paths (stem2a→2b and pool were concatenated on channels)
+        # The comment "combine both together" is the key — two different feature extraction paths are merged
         x = self.stem4(x)
 
         return x
@@ -1181,25 +1288,38 @@ class HGV2_Block(TheseusLayer):
         use_lab (bool): Whether to use the LAB operation. Defaults to False.
         lr_mult (float): Learning rate multiplier for the layer. Defaults to 1.0.
     """
-
+    """
+    Component: Why?????
+    Dense aggregation :Early layers capture fine details; later layers add context. Concatenating all means the output benefits from all levels of abstraction
+    Intermediate features: Without saving them, you lose information. With 6 layers, you lose a lot. Dense connections preserve it.
+    Squeeze-Excitation: The concatenated tensor is huge. Squeeze-Excitation learns which concatenated features are useful, mixing and filtering them
+    1×1 convolutions: Cheap, spatial-invariant, perfect for channel mixing. No kernel weight overhead like 3×3
+    Bottleneck (2-step compression): Saves computation. A 256→64 step is expensive; 256→32→64 is a third the cost. Also forces a learned compression (information bottleneck).
+    Optional residual: If identity=True, gradients can skip the entire block (easier backprop). Useful in very deep networks.
+    light_block parameter: For stages 1-2, use standard convs (heavy but powerful). For stages 3-4, use depthwise-separable (light but still good). Balances cost and expressiveness.
+    """
     def __init__(
         self,
-        in_channels,
-        mid_channels,
-        out_channels,
-        kernel_size=3,
-        layer_num=6,
-        identity=False,
-        light_block=True,
-        use_lab=False,
-        lr_mult=1.0,
+        in_channels,# in_channels: Size of input (e.g., 16 channels)
+        mid_channels,# mid_channels: Size of intermediate features (e.g., 40 channels) — all internal layers use this
+        out_channels,# out_channels: Final output size (e.g., 64 channels) — after squeeze-excitation
+        kernel_size=3,# kernel_size: Conv kernel size (default 3×3)
+        layer_num=6, # layer_num: How many conv layers to stack (default 6) — more layers = more feature aggregation
+        identity=False,# identity: Whether to use residual shortcut (like ResNet)
+        light_block=True,# light_block: Whether to use depthwise-separable convs (lighter) or standard convs (heavier)
+        use_lab=False,# use_lab: Special parameter for some training techniques
+        lr_mult=1.0,# lr_mult: Learning rate multiplier for this block's weights
     ):
+        #  This block is a "super-layer" that densely reuses all intermediate features, intelligently squeezes them down, and outputs refined features.
+        #  It's a powerful building block for text recognition because it forces the network to preserve and reuse information at multiple scales.
         super().__init__()
         self.identity = identity
 
         self.layers = nn.ModuleList()
         block_type = "LightConvBNAct" if light_block else "ConvBNAct"
+        # Create a list of 6 conv blocks (by default)
         for i in range(layer_num):
+            # First layer takes in_channels (original input size) and outputs mid_channels
             self.layers.append(
                 eval(block_type)(
                     in_channels=in_channels if i == 0 else mid_channels,
@@ -1210,7 +1330,21 @@ class HGV2_Block(TheseusLayer):
                     lr_mult=lr_mult,
                 )
             )
+            # All remaining layers take mid_channels as input and output mid_channels
+            # This creates a consistent pipeline: all internal features are the same size
+            # All 6 blocks do the same work — process features of size mid_channels
+            # Why this matters:
+            # LEFT (Standard): Each layer overwrites the previous. By Layer 6, you've only got Layer 6's
+            # refined features. Layer 1's original details are GONE. The network can't use them anymore.
+            # RIGHT (Dense): All 6 layer outputs PLUS the original input are saved. When you concatenate
+            # them, the final layer receives BOTH early simple features AND late complex features at the
+            # same time. It can combine them however it wants via the squeeze-excitation bottlenec
+        # Why?
+            # Standardizes internal processing
+            # Each layer can focus on refining the same-sized feature space
+            # Information flows smoothly through all layers
         # feature aggregation
+        # All intermediate outputs get concatenated (we'll see this in forward)
         total_channels = in_channels + layer_num * mid_channels
         self.aggregation_squeeze_conv = ConvBNAct(
             in_channels=total_channels,
@@ -1220,6 +1354,12 @@ class HGV2_Block(TheseusLayer):
             use_lab=use_lab,
             lr_mult=lr_mult,
         )
+        # Why the name "squeeze"?
+            # It squeezes (compresses) the fat concatenated tensor.
+        # Why 1×1 convolution?
+            # 1×1 convs are cheap (no spatial weight sharing, just channel mixing)
+            # They learn which concatenated features are important
+            # They combine information across channels
         self.aggregation_excitation_conv = ConvBNAct(
             in_channels=out_channels // 2,
             out_channels=out_channels,
@@ -1228,22 +1368,35 @@ class HGV2_Block(TheseusLayer):
             use_lab=use_lab,
             lr_mult=lr_mult,
         )
+        # What's happening:
+            # Takes the squeezed features (out_channels // 2) and expands back to out_channels
+            # This is the final refinement step
+            # Why two steps instead of one?
+                # Computational efficiency: (256→32→64) is cheaper than (256→64) directly
+                    # Squeeze cuts down channels, reducing computation
+                    # Excitation is light work to expand back
+                # Bottleneck design: Forces the network to learn a compressed representation
+                    # Like an information bottleneck — features must pass through a narrow gate
+                    # Only the most important features survive the squeeze
+                    # This is inspired by SE-Net (Squeeze-and-Excitation networks)
 
     def forward(self, x):
-        identity = x
-        output = []
-        output.append(x)
-        for layer in self.layers:
-            x = layer(x)
-            output.append(x)
-        x = torch.cat(output, dim=1)
-        x = self.aggregation_squeeze_conv(x)
-        x = self.aggregation_excitation_conv(x)
-        if self.identity:
+        identity = x #  # Step 1: Save original input
+        output = [] #    # Step 2: Collect all outputs
+        output.append(x) #  # Step 3: Add original input to collection
+        for layer in self.layers:# # Step 4: Process through 6 layers
+            x = layer(x) # Apply conv
+            output.append(x) # Save this layer's output
+        x = torch.cat(output, dim=1) # # Step 5: Concatenate all along channel dim
+        x = self.aggregation_squeeze_conv(x) #  # Step 6: Squeeze
+        x = self.aggregation_excitation_conv(x) #  Step 7: Excitation
+        if self.identity: #  Step 8: Optional residual
             x += identity
         return x
 
-
+# Simple pipeline:
+    # Optionally shrink the image resolution
+    # Pass through all the blocks sequentially
 class HGV2_Stage(TheseusLayer):
     """
     HGV2_Stage, the basic unit that constitutes the PPHGNetV2.
@@ -1260,25 +1413,27 @@ class HGV2_Stage(TheseusLayer):
         use_lab (bool, optional): Whether to use the LAB operation. Defaults to False.
         lr_mult (float, optional): Learning rate multiplier for the layer. Defaults to 1.0.
     """
-
+    # This is a building block for a neural network called PPHGNetV2 (a pose/hand estimation model).
+    # Think of it as a "stage" that processes image features through multiple processing steps.
     def __init__(
         self,
-        in_channels,
-        mid_channels,
-        out_channels,
-        block_num,
-        layer_num=6,
-        is_downsample=True,
-        light_block=True,
-        kernel_size=3,
-        use_lab=False,
-        stride=2,
+        in_channels,# in_channels: Size of input (e.g., 16 channels)
+        mid_channels,# mid_channels: Size of intermediate features (e.g., 40 channels) — all internal layers use this
+        out_channels,# How many channels come OUT (e.g., 64)
+        block_num,# How many "blocks" to stack (more = more processing)
+        layer_num=6,# How many conv layers per block (default 6 — more = deeper feature extraction)
+        is_downsample=True,# Whether to shrink the image resolution (e.g., 256×256 → 128×128)
+        light_block=True, # Use a lighter/faster version of the block (for efficiency)
+        kernel_size=3,# kernel_size: Conv kernel size (default 3×3)
+        use_lab=False, #
+        stride=2, # If downsampling, how much to shrink (stride=2 means half the size)
         lr_mult=1.0,
     ):
 
         super().__init__()
         self.is_downsample = is_downsample
         if self.is_downsample:
+            # If downsampling is enabled, it creates a depthwise convolution (groups=in_channels) that shrinks the spatial dimensions
             self.downsample = ConvBNAct(
                 in_channels=in_channels,
                 out_channels=in_channels,
@@ -1291,7 +1446,11 @@ class HGV2_Stage(TheseusLayer):
             )
 
         blocks_list = []
+        # The first block has identity=False (no skip connection), the rest have identity=True (they reuse features)
         for i in range(block_num):
+            # Stacks multiple HGV2_Block units
+            # The first block takes in_channels as input
+            # All other blocks take out_channels (they pass data between themselves)
             blocks_list.append(
                 HGV2_Block(
                     in_channels=in_channels if i == 0 else out_channels,
@@ -1309,10 +1468,24 @@ class HGV2_Stage(TheseusLayer):
 
     def forward(self, x):
         if self.is_downsample:
-            x = self.downsample(x)
-        x = self.blocks(x)
+            x = self.downsample(x)# # Shrink the image
+        x = self.blocks(x) #  # Process through all blocks
         return x
-
+'''
+Input Image
+    ↓
+[Stem Block] (initial processing)
+    ↓
+[Stage 1] (process features)
+    ↓
+[Stage 2] (process features)
+    ↓
+[Stage 3] (process features)
+    ↓
+[Stage 4] (process features)
+    ↓
+[Output] (classification or detection)
+'''
 
 class PPHGNetV2(TheseusLayer):
     """
@@ -1330,20 +1503,32 @@ class PPHGNetV2(TheseusLayer):
     Returns:
         model: nn.Module. Specific PPHGNetV2 model depends on args.
     """
-
+    """
+        Mode 2: Text Recognition (text_rec=True, det=False)
+        Input Image
+            ↓
+        [Stem + 4 Stages]
+            ↓
+        [Special Pooling] → Convert to 40-step sequence
+            ↓
+        [Classification] → Predict which character at each step
+        Outputs a sequence of class predictions (for OCR/text recognition)
+        During training: adaptive pool to [1, 40] (1 height, 40 width = 40 steps)
+        During inference: simpler [3, 2] pooling
+    """
     def __init__(
         self,
-        stage_config,
-        stem_channels=[3, 32, 64],
+        stage_config,# A dictionary that defines each stage (channels, stride, block count, etc.)
+        stem_channels=[3, 32, 64], # Three numbers: [input_channels, mid_channels, output_channels] for the initial stem block
         use_lab=False,
-        use_last_conv=True,
-        class_expand=2048,
-        dropout_prob=0.0,
-        class_num=1000,
+        use_last_conv=True, # Whether to add a final 1×1 convolution layer before classification
+        class_expand=2048,# Number of channels in that final conv layer (e.g., 2048)
+        dropout_prob=0.0, # Dropout rate to prevent overfitting
+        class_num=1000,# How many output classes (e.g., 1000 for classification, or character classes for text recognition)
         lr_mult_list=[1.0, 1.0, 1.0, 1.0, 1.0],#  Learning rate multiplier for the stages.
-        det=False,
-        text_rec=False,
-        out_indices=None,
+        det=False,# If True → detection mode; if False → text recognition mode
+        text_rec=False,# If True → use special pooling for text recognition sequences
+        out_indices=None,# Which stages to output from (for multi-scale features)
         **kwargs,
     ):
         super().__init__()
@@ -1357,6 +1542,7 @@ class PPHGNetV2(TheseusLayer):
         self.out_channels = []
 
         # stem
+        # What happens: Initial feature extraction from raw RGB image. Converts colors → learned features.
         self.stem = StemBlock(
             in_channels=stem_channels[0],#
             mid_channels=stem_channels[1],#
@@ -1365,9 +1551,186 @@ class PPHGNetV2(TheseusLayer):
             lr_mult=lr_mult_list[0],
             text_rec=text_rec,
         )
-
+        '''
+        Input: [B, 3, 48, 320]
+        
+        StemBlock processes:
+          - in_channels: 3 → mid_channels: 32 → out_channels: 64
+          - Typically applies some downsampling
+        
+        Output: [B, 64, 24, 160]  (roughly H÷2, W÷2)
+        '''
         # stages
         self.stages = nn.ModuleList()
+        """
+        STEM BLOCK
+                Purpose: Initial feature extraction from raw RGB image. Converts colors → learned features.
+                        in_channels = 3,  # RGB input
+                        mid_channels= 32, # internal working size
+                        out_channels= 64,
+                        text_rec = True
+                
+        
+                Input: [B, 3, 48, 320]
+                        ↓
+                StemBlock processes (downsamples ~H÷2, W÷2)
+                        ↓
+                Output: [B, 64, 24, 160]  (height and width halved)
+        
+        
+        Stage 1
+                Purpose: First pass through features. Reduce vertical dimension (height) quickly. Start expanding channels.
+                        in_channels = 64,   # (from stem)
+                        mid_channels= 48,   # (internal working size)
+                        out_channels= 128,
+                        block_num= 1,       # (just 1 block)
+                        is_downsample= True,
+                        light_block= False, # (full power block)
+                        kernel_size= 3,
+                        layer_num= 6,
+                        stride= [2, 1],     # (height÷2, width stays same)
+                
+        
+                Input: [B, 64, 24, 160]
+                        ↓
+                Downsample (stride [2,1]): shrink height by 2
+                        ↓
+                1 HGV2_Block: 64→128 channels
+                  - 6 conv layers with mid_channels=48
+                  - squeeze-excitation attention
+                        ↓
+                Output: [B, 128, 12, 160]  (height÷2 = 24→12, width same)
+        
+        
+        Stage 2
+                Purpose: Now compress the horizontal dimension. Massively expand channels to 512 (learning richer features).
+                        in_channels = 128,
+                        mid_channels= 96,
+                        out_channels= 512,
+                        block_num= 1,
+                        is_downsample= True,
+                        light_block= False,
+                        kernel_size= 3,
+                        layer_num= 6,
+                        stride= [1, 2],     # (height stays same, width÷2)
+                
+        
+                Input: [B, 128, 12, 160]
+                        ↓
+                Downsample (stride [1,2]): shrink width by 2
+                        ↓
+                1 HGV2_Block: 128→512 channels
+                  - internal working with mid_channels=96
+                        ↓
+                Output: [B, 512, 12, 80]  (height same, width÷2 = 160→80)
+        
+        
+        Stage 3
+        Purpose:
+        - Multiple blocks = deeper feature learning
+        - Light blocks = more efficient
+        - Bigger kernel (5×5) = sees larger context
+        - This is where semantic understanding builds up        
+                        in_channels = 512,
+                        mid_channels= 192,
+                        out_channels= 1024,
+                        block_num= 3,       # 3 sequential blocks for deep processing
+                        is_downsample= True,
+                        light_block= True,  # Lighter/faster version
+                        kernel_size= 5,     # Bigger kernel for wider context
+                        layer_num= 6,
+                        stride= [2, 1],     # (height÷2, width stays same)
+                
+                Input: [B, 512, 12, 80]
+                        ↓
+                Downsample (stride [2,1]): shrink height by 2
+                        ↓
+                Block 1: 512→1024 (heavy processing)
+                  ├─ 6 conv layers with mid_channels=192
+                  └─ squeeze-excitation
+                        ↓
+                Block 2: 1024→1024 (skip connection helps)
+                  ├─ 6 conv layers with mid_channels=192
+                  └─ squeeze-excitation
+                        ↓
+                Block 3: 1024→1024 (more feature refinement)
+                  ├─ 6 conv layers with mid_channels=192
+                  └─ squeeze-excitation
+                        ↓
+                Output: [B, 1024, 6, 80]  (height÷2 = 12→6, width same)
+        Stage 4
+                Purpose: Final high-level feature extraction. Output channels = 2048 (very rich features).
+                        in_channels = 1024,
+                        mid_channels= 384,
+                        out_channels= 2048,
+                        block_num= 1,
+                        is_downsample= True,
+                        light_block= True,
+                        kernel_size= 5,
+                        layer_num= 6,
+                        stride= [2, 1],     # (height÷2, width stays same)
+                
+        
+                Input: [B, 1024, 6, 80]
+                        ↓
+                Downsample (stride [2,1]): shrink height by 2
+                        ↓
+                Block 1: 1024→2048 (final feature expansion)
+                  - 6 conv layers with mid_channels=384
+                  - squeeze-excitation
+                        ↓
+                Output: [B, 2048, 3, 80]  (height÷2 = 6→3, width same)
+        
+        
+        TEXT RECOGNITION POOLING
+                Purpose: Convert [B, 2048, 3, 80] feature map into a 40-position sequence for CTC loss (character recognition)
+                
+        
+                Input: [B, 2048, 3, 80]
+                        ↓
+                if self.text_rec:
+                    if self.training:
+                        x = F.adaptive_avg_pool2d(x, [1, 40])
+                        # Adaptive pooling to exact size [1, 40]
+                        # Height: 3 → 1
+                        # Width: 80 → 40
+                    else:
+                        x = F.avg_pool2d(x, [3, 2])
+                        # Average pooling with kernel [3, 2]
+                        # Height: 3 ÷ 3 = 1
+                        # Width: 80 ÷ 2 = 40
+                        ↓
+                Output: [B, 2048, 1, 40]
+                
+                This creates 40 positions, each with 2048 rich feature channels
+                Perfect for CTC: predicts one character at each of the 40 positions!
+        COMPLETE SIZE PROGRESSION
+                
+        
+                Input:         [B, 3,    48,   320]   ← Raw image
+                After Stem:    [B, 64,   24,   160]   ← Initial features
+                After Stage 1: [B, 128,  12,   160]   ← More features, shorter height
+                After Stage 2: [B, 512,  12,   80]    ← Rich features, narrower width
+                After Stage 3: [B, 1024, 6,    80]    ← Deep understanding, half height again
+                After Stage 4: [B, 2048, 3,    80]    ← Maximum channel richness
+                After Pool:    [B, 2048, 1,    40]    ← 40-character CTC sequence!
+        KEY INSIGHTS
+        
+                ✓ Height compression (48 → 3): Aggressive reduction because text doesn't need much vertical info
+                
+                ✓ Width preservation (320 → 40): Moderate reduction to maintain character positions
+                  (320 input width → 40 output positions = ~8 pixels per character on average)
+                
+                ✓ Channel expansion (3 → 2048): Massive expansion for rich feature learning
+                
+                ✓ Stage 3 has 3 blocks: Deepest processing here for semantic understanding
+                
+                ✓ Light blocks in Stage 3 & 4: Balance between feature richness and computational efficiency
+                
+                ✓ Kernel size 5×5 in Stage 3 & 4: Larger receptive field for context understanding
+                
+                ✓ Final output [1, 40]: Perfect for CTC loss - predict 1 of N characters at each of 40 positions!
+        """
         for i, k in enumerate(stage_config):
             (
                 in_channels,

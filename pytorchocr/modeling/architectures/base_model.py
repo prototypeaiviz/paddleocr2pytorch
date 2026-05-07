@@ -36,7 +36,7 @@ class BaseModel(nn.Module):
             self.transform = build_transform(config['Transform'])
             in_channels = self.transform.out_channels
             # raise NotImplementedError
-
+        # BUILD BACKBONE
         # build backbone, backbone is need for del, rec and cls
         if 'Backbone' not in config or config['Backbone'] is None:
             self.use_backbone = False
@@ -46,7 +46,8 @@ class BaseModel(nn.Module):
             self.backbone = build_backbone(config["Backbone"], model_type)
             in_channels = self.backbone.out_channels
 
-        # build neck
+        # BUILD NECK
+        # very important point
         # for rec, neck can be cnn,rnn or reshape(None)
         # for det, neck can be FPN, BIFPN and so on.
         # for cls, neck should be none
@@ -57,7 +58,8 @@ class BaseModel(nn.Module):
             config['Neck']['in_channels'] = in_channels
             self.neck = build_neck(config['Neck'])
             in_channels = self.neck.out_channels
-
+        # BUILD HEAD
+        # this is working
         # # build head, head is need for det, rec and cls
         if 'Head' not in config or config['Head'] is None:
             self.use_head = False

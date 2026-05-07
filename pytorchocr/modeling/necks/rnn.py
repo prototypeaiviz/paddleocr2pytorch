@@ -31,7 +31,7 @@ class EncoderWithRNN_(nn.Module):
         out2, h2 = self.rnn2(torch.flip(x, [1]))
         return torch.cat([out1, torch.flip(out2, [1])], 2)
 
-
+# USED
 class EncoderWithRNN(nn.Module):
     def __init__(self, in_channels, hidden_size):
         super(EncoderWithRNN, self).__init__()
@@ -43,6 +43,7 @@ class EncoderWithRNN(nn.Module):
         x, _ = self.lstm(x)
         return x
 
+# USED
 
 class EncoderWithFC(nn.Module):
     def __init__(self, in_channels, hidden_size):
@@ -58,7 +59,7 @@ class EncoderWithFC(nn.Module):
         x = self.fc(x)
         return x
 
-
+# USED THIS is the one used
 class EncoderWithSVTR(nn.Module):
     # Lightweight transformer neck used inside MultiHead for PP-OCRv5.
     # Takes the 2D feature map from the backbone, applies global self-attention
@@ -192,7 +193,7 @@ class EncoderWithSVTR(nn.Module):
 
         return z
 
-
+# we are here
 class SequenceEncoder(nn.Module):
     def __init__(self, in_channels, encoder_type, hidden_size=48, **kwargs):
         super(SequenceEncoder, self).__init__()
@@ -202,22 +203,27 @@ class SequenceEncoder(nn.Module):
         if encoder_type == 'reshape':
             self.only_reshape = True
         else:
+            # we have the svtr encoder
+            # we are using these 3 classes
             support_encoder_dict = {
                 'reshape': Im2Seq,
                 'fc': EncoderWithFC,
                 'rnn': EncoderWithRNN,
                 'svtr': EncoderWithSVTR,
             }
+            # double check that svtr is inside the dictionary
             assert encoder_type in support_encoder_dict, '{} must in {}'.format(
                 encoder_type, support_encoder_dict.keys())
-
+            # we use svtr in here
             if encoder_type == "svtr":
                 self.encoder = support_encoder_dict[encoder_type](
                     self.encoder_reshape.out_channels, **kwargs)
             else:
                 self.encoder = support_encoder_dict[encoder_type](
                     self.encoder_reshape.out_channels, hidden_size)
+            # repeated ?
             self.out_channels = self.encoder.out_channels
+            # set to false
             self.only_reshape = False
 
     def forward(self, x):
@@ -227,6 +233,8 @@ class SequenceEncoder(nn.Module):
                 x = self.encoder(x)
             return x
         else:
+            # we are here this is hte one we are using
             x = self.encoder(x)
+            # reshaping
             x = self.encoder_reshape(x)
             return x
