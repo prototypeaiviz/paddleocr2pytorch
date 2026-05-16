@@ -89,16 +89,18 @@ class MultiHead(nn.Module):
         ctc_encoder = self.ctc_encoder(x)
         # the above output is size of [1,40,120]
         ctc_out = self.ctc_head(ctc_encoder)
+
+        # For inference or LoRA training: return CTC output only
+        if not self.training or not hasattr(self, 'sar_head'):
+            return ctc_out
+
+        # Full training with SAR/NRTR heads
         head_out = dict()
         head_out['ctc'] = ctc_out
         head_out['res'] = ctc_out
         head_out['ctc_neck'] = ctc_encoder
-        # eval mode so we are not training
-        if not self.training:
-            return ctc_out
-        # here this problem related to training
+
         if self.gtc_head == 'sar':
-            # you enter into here also
             sar_out = self.sar_head(x, data[1:])['res']
             head_out['sar'] = sar_out
         else:

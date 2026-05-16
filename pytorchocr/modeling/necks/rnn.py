@@ -61,7 +61,18 @@ class EncoderWithFC(nn.Module):
 
 # USED THIS is the one used
 """
-
+This is the neck of a text recognition model — it sits between the backbone (which extracts raw features) 
+and the CTC decoder (which reads the text). Its job is to run a mini transformer on compressed features, then merge the result back with the original.
+The whole module does one thing elegantly: 
+run a cheap transformer on compressed features, then merge the result back with the original rich features.
+Here's the full story:
+Why not just run attention on the backbone output directly? The backbone gives [B, 2048, 1, 40] — running global self-attention on 2048-dim features per token would be enormous. So conv1 and conv2 act as a bottleneck ladder: 2048 → 256 → 120. Now the transformer runs on 120-dim tokens, which is roughly 17× cheaper.
+* The transformer part (svtr_block × 2) is exactly the Block class you already saw — global attention so every one of the 40 spatial positions can attend to every other.
+* This lets the model understand long-range dependencies across the whole word (e.g. the first character informing the last).
+* The guide shortcut is the clever bit. At the very start, h = z.clone() saves a detached copy of the full 2048-channel backbone features. 
+* After the transformer is done and restored back to 2048 channels via conv3, the code does cat(h, conv3_out) — concatenating original + attended features into 4096 channels.
+* The stop_gradient=True means gradients don't flow back through h a second time, avoiding double-counting during backprop. conv4 and conv1x1 then fuse and compress this combined tensor back down to 120.
+* The result is a 40-token sequence where each token contains both: raw backbone detail AND global context from the transformer — handed to the CTC decoder to read the final text.
 """
 class EncoderWithSVTR(nn.Module):
     # Lightweight transformer neck used inside MultiHead for PP-OCRv5.
