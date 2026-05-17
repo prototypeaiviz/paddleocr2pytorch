@@ -89,6 +89,9 @@ class LoRALinear(nn.Module):
 
 class LoRAInjector:
     """
+    This function is a surgeon — it walks into the model, finds specific Linear layers by their path name,
+    swaps them out for LoRA-wrapped versions, then freezes everything else.
+
     Utility class to inject LoRA layers into a pre-trained model.
     Replaces target Linear layers with LoRA-wrapped versions while freezing the backbone.
     """
@@ -120,13 +123,16 @@ class LoRAInjector:
         updated_modules = []
 
         for target_name in target_modules:
-            parts = target_name.split('.')
+            parts = target_name.split('.')# split based on the dot
             module = model
 
             # Navigate to parent module
+            #give me everything except hte last part
             for part in parts[:-1]:
                 if hasattr(module, part):
                     module = getattr(module, part)
+                    # getattr(obj, name) is identical to obj.name
+                    # like that you have exactly the module that you searching for
                 else:
                     print(f"Warning: Could not find path {target_name}, skipping")
                     continue
@@ -134,10 +140,12 @@ class LoRAInjector:
             # Get the target linear layer
             final_part = parts[-1]
             if hasattr(module, final_part):
+                # this is the part that i am most interested in implementing lora ON
                 linear_layer = getattr(module, final_part)
 
                 if isinstance(linear_layer, nn.Linear):
                     # Create LoRA-wrapped version
+                    # cchecking that this is a linar layer
                     lora_linear = LoRALinear(
                         in_features=linear_layer.in_features,
                         out_features=linear_layer.out_features,
@@ -156,6 +164,7 @@ class LoRAInjector:
 
                     # Replace the original layer
                     setattr(module, final_part, lora_linear)
+                    # setattr(obj, name, value) is identical to obj.name = value — it writes one.
                     updated_modules.append(target_name)
 
         print(f"✓ Injected LoRA into {len(updated_modules)} modules")
@@ -277,9 +286,9 @@ if __name__ == '__main__':
     print("Testing LoRA implementation...")
 
     # Create a simple test
-    lora_linear = LoRALinear(in_features=120, out_features=120, r=8)
+    lora_linear_model = LoRALinear(in_features=120, out_features=120, r=8)
     x = torch.randn(2, 120)
-    output = lora_linear(x)
+    output = lora_linear_model(x)
     print(f"Input shape: {x.shape}")
     print(f"Output shape: {output.shape}")
     print("✓ LoRA layer works correctly")
