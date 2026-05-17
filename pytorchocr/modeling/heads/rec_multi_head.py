@@ -86,11 +86,11 @@ class MultiHead(nn.Module):
 
     def forward(self, x, data=None):
         # input is 1,20248,1,40 this is the input size
+        # size is 1,40,120
         ctc_encoder = self.ctc_encoder(x)
         # the above output is size of [1,40,120]
         ctc_out = self.ctc_head(ctc_encoder)
-
-        # For inference or LoRA training: return CTC output only
+        # output is 1,40,18385        # For inference or LoRA training: return CTC output only
         if not self.training or not hasattr(self, 'sar_head'):
             return ctc_out
 
