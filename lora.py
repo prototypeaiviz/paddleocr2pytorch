@@ -104,6 +104,8 @@ class LoRAInjector:
         alpha: float = 16.0,
         dropout: float = 0.0,
         freeze_backbone: bool = True,
+        unfreeze_norms: bool = True,
+
     ) -> nn.Module:
         """
         Inject LoRA layers into specified modules.
@@ -115,7 +117,7 @@ class LoRAInjector:
             alpha: Scaling factor
             dropout: Dropout rate
             freeze_backbone: If True, freeze all non-LoRA parameters
-
+            unfreeze_norms: if True, unfreeze norms
         Returns:
             Model with LoRA injected
         """
@@ -173,28 +175,39 @@ class LoRAInjector:
 
         # Freeze backbone (all non-LoRA parameters)
         if freeze_backbone:
-            LoRAInjector.freeze_non_lora_parameters(model)
+            LoRAInjector.freeze_non_lora_parameters(model, unfreeze_norms=unfreeze_norms)
 
         return model
 
     @staticmethod
-    def freeze_non_lora_parameters(model: nn.Module) -> None:
+    def freeze_non_lora_parameters(model: nn.Module, unfreeze_norms: bool = True) -> None:
         """
-        Freeze all parameters except LoRA parameters (lora_a and lora_b).
+        Freeze all parameters except LoRA parameters and optionally LayerNorm.
         """
         frozen_count = 0
-        trainable_count = 0
+        lora_count = 0
+        norm_count = 0
 
         for name, param in model.named_parameters():
             if 'lora_' in name:
                 param.requires_grad = True
-                trainable_count += 1
+                lora_count += 1
+
+            elif (unfreeze_norms
+                  and ('norm' in name.lower())
+                  and ('svtr_block' in name or 'ctc_encoder' in name)
+                  and ('weight' in name or 'bias' in name)):
+                param.requires_grad = True
+                norm_count += 1
+
             else:
                 param.requires_grad = False
                 frozen_count += 1
 
-        print(f"✓ Froze {frozen_count} parameters")
-        print(f"✓ {trainable_count} LoRA parameters are trainable")
+        print(f"✓ Froze          {frozen_count} parameters")
+        print(f"✓ LoRA           {lora_count} parameters are trainable")
+        print(f"✓ LayerNorm      {norm_count} parameters are trainable")
+        print(f"✓ Total trainable: {lora_count + norm_count}")
 
     @staticmethod
     def get_lora_stats(model: nn.Module) -> dict:
@@ -225,6 +238,7 @@ def inject_lora_to_ppocr_v5(
     r: int = 8,
     alpha: float = 16.0,
     dropout: float = 0.0,
+    unfreeze_norms:bool = True,
 ) -> nn.Module:
     """
     Convenience function to inject LoRA into PP-OCRv5_server_rec model.
@@ -235,7 +249,7 @@ def inject_lora_to_ppocr_v5(
         r: LoRA rank
         alpha: Scaling factor
         dropout: Dropout rate
-
+        unfreeze_norms:unfreeze norms
     Returns:
         Model with LoRA injected and backbone frozen
     """
@@ -267,6 +281,7 @@ def inject_lora_to_ppocr_v5(
         alpha=alpha,
         dropout=dropout,
         freeze_backbone=True,
+        unfreeze_norms=unfreeze_norms
     )
 
     # Print statistics
