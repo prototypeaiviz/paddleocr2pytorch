@@ -65,8 +65,4 @@ class CTCHead(nn.Module):
         else:
             result = predicts
 
-        if not self.training:
-            predicts = F.softmax(predicts, dim=2)
-            result = predicts
-
         return result
