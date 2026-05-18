@@ -56,8 +56,8 @@ class LoRALinear(nn.Module):
         self.scale = alpha / r
 
         # Original weight and bias as nn.Parameter (non-trainable)
-        self.weight = nn.Parameter(torch.zeros(out_features, in_features), requires_grad=False)
-        self.bias = nn.Parameter(torch.zeros(out_features), requires_grad=False)
+        self.register_buffer("weight", torch.zeros(out_features, in_features))
+        self.register_buffer("bias", torch.zeros(out_features))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -65,13 +65,9 @@ class LoRALinear(nn.Module):
                              = x @ W.T + scale * x @ B @ A.T + bias
         """
         # Ensure all tensors are on the same device as x
-        weight = self.weight.to(x.device) if self.weight is not None else None
-        bias = self.bias.to(x.device) if self.bias is not None else None
-        lora_a = self.lora_a.to(x.device)
-        lora_b = self.lora_b.to(x.device)
 
         # Original linear transformation
-        out = torch.nn.functional.linear(x, weight, bias)
+        out = torch.nn.functional.linear(x, self.weight, self.bias)
 
         # LoRA adaptation: scale * (x @ B @ A.T)
         # x: (batch, ..., in_features)
@@ -80,7 +76,7 @@ class LoRALinear(nn.Module):
         # A: (out_features, rank) -> A.T: (rank, out_features)
         # (x @ B) @ A.T: (batch, ..., out_features)
         x_dropped = self.dropout_fn(x)
-        lora_update = (x_dropped @ lora_b) @ lora_a.T
+        lora_update = (x_dropped @ self.lora_b) @ self.lora_a.T
         lora_update = lora_update * self.scale
         out = out + lora_update
 
@@ -180,9 +176,10 @@ class LoRAInjector:
         return model
 
     @staticmethod
+    @staticmethod
     def freeze_non_lora_parameters(model: nn.Module, unfreeze_norms: bool = True) -> None:
         """
-        Freeze all parameters except LoRA parameters and optionally LayerNorm.
+        Freeze all parameters except LoRA parameters and LayerNorm layers.
         """
         frozen_count = 0
         lora_count = 0
@@ -193,9 +190,10 @@ class LoRAInjector:
                 param.requires_grad = True
                 lora_count += 1
 
+            # Simplified and robust check for any normalization layer within the processing heads or encoders
             elif (unfreeze_norms
-                  and ('norm' in name.lower())
-                  and ('svtr_block' in name or 'ctc_encoder' in name)
+                  and ('norm' in name.lower() or 'ln' in name.lower())
+                  and ('head' in name.lower() or 'encoder' in name.lower() or 'svtr_block' in name.lower())
                   and ('weight' in name or 'bias' in name)):
                 param.requires_grad = True
                 norm_count += 1
