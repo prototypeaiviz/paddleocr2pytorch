@@ -126,14 +126,16 @@ class LoRAInjector:
 
             # Navigate to parent module
             #give me everything except hte last part
+            found = True
             for part in parts[:-1]:
                 if hasattr(module, part):
                     module = getattr(module, part)
-                    # getattr(obj, name) is identical to obj.name
-                    # like that you have exactly the module that you searching for
                 else:
                     print(f"Warning: Could not find path {target_name}, skipping")
-                    continue
+                    found = False
+                    break
+            if not found:
+                continue
 
             # Get the target linear layer
             final_part = parts[-1]
@@ -175,7 +177,6 @@ class LoRAInjector:
 
         return model
 
-    @staticmethod
     @staticmethod
     def freeze_non_lora_parameters(model: nn.Module, unfreeze_norms: bool = True) -> None:
         """
