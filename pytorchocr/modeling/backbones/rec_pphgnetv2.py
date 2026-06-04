@@ -1391,7 +1391,7 @@ class HGV2_Block(TheseusLayer):
         x = self.aggregation_squeeze_conv(x) #  # Step 6: Squeeze
         x = self.aggregation_excitation_conv(x) #  Step 7: Excitation
         if self.identity: #  Step 8: Optional residual
-            x += identity
+            x = x + identity        # was: x += identity
         return x
 
 # Simple pipeline:

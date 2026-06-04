@@ -13,8 +13,40 @@ where α is a scaling factor and r is the rank.
 import torch
 import torch.nn as nn
 from typing import List, Tuple
+import re
 
+import math
 
+class LoRAConv2d(nn.Module):
+    """
+    Conv2d + LoRA. Wraps a frozen Conv2d and adds a low-rank conv branch:
+        out = base(x) + scale * up(down(x))
+    - down: in_ch -> r, replicates base kernel/stride/padding/dilation so spatial dims match
+    - up:   r -> out_ch, 1x1, zero-init (so the adapter is a no-op at initialization)
+    """
+    def __init__(self, base: nn.Conv2d, r: int = 8, alpha: float = 16.0, dropout: float = 0.0):
+        super().__init__()
+        self.r = r
+        self.scale = alpha / r
+        self.dropout_fn = nn.Dropout(dropout)
+
+        self.base = base                      # kept as a frozen child
+        for p in self.base.parameters():
+            p.requires_grad = False
+
+        self.lora_down = nn.Conv2d(
+            base.in_channels, r,
+            kernel_size=base.kernel_size, stride=base.stride,
+            padding=base.padding, dilation=base.dilation,
+            groups=1, bias=False,             # full low-rank mixing
+        )
+        self.lora_up = nn.Conv2d(r, base.out_channels, kernel_size=1, bias=False)
+
+        nn.init.kaiming_uniform_(self.lora_down.weight, a=math.sqrt(5))
+        nn.init.zeros_(self.lora_up.weight)   # ΔW = 0 initially
+
+    def forward(self, x):
+        return self.base(x) + self.scale * self.lora_up(self.lora_down(self.dropout_fn(x)))
 class LoRALinear(nn.Module):
     """
     Linear layer with LoRA adaptation.
@@ -167,6 +199,14 @@ class LoRAInjector:
                     # setattr(obj, name, value) is identical to obj.name = value — it writes one.
                     updated_modules.append(target_name)
 
+                elif isinstance(linear_layer, nn.Conv2d):  # ← NEW
+                    setattr(module, final_part,
+                            LoRAConv2d(linear_layer, r=r, alpha=alpha, dropout=dropout))
+                    updated_modules.append(target_name)
+
+                else:
+                    print(f"Skip {target_name}: {type(linear_layer).__name__} not supported")
+
         print(f"✓ Injected LoRA into {len(updated_modules)} modules")
         for name in updated_modules:
             print(f"  - {name}")
@@ -231,7 +271,46 @@ class LoRAInjector:
             'lora_percentage': (lora_params / trainable_params * 100) if trainable_params > 0 else 0,
         }
 
+def backbone_spatial_targets(model, stages=(2,)):
+    """Depthwise/spatial convs (the shape filters) in the given stages.
+       Skips 1x1 channel-mixers and the downsample convs."""
+    out = []
+    for name, m in model.named_modules():
+        if not isinstance(m, nn.Conv2d):
+            continue
+        mt = re.search(r'stages\.(\d+)\.', name)
+        if not mt or int(mt.group(1)) not in stages:
+            continue
+        if m.kernel_size != (1, 1) and 'downsample' not in name:
+            out.append(name)              # stage2 -> the .conv2.conv (5x5 depthwise)
+    return out
+def inject_lora_to_ppocr_v5_with_backbone(
+        model, r_head=16, alpha_head=32,
+        r_backbone=8, alpha_backbone=16,        # smaller rank for the backbone
+        dropout=0.0, backbone_stages=(2,), unfreeze_norms=False):
 
+    head_targets = [
+        'head.ctc_encoder.encoder.svtr_block.0.mixer.qkv',
+        'head.ctc_encoder.encoder.svtr_block.0.mixer.proj',
+        'head.ctc_encoder.encoder.svtr_block.0.mlp.fc1',
+        'head.ctc_encoder.encoder.svtr_block.0.mlp.fc2',
+        'head.ctc_encoder.encoder.svtr_block.1.mixer.qkv',
+        'head.ctc_encoder.encoder.svtr_block.1.mixer.proj',
+        'head.ctc_encoder.encoder.svtr_block.1.mlp.fc1',
+        'head.ctc_encoder.encoder.svtr_block.1.mlp.fc2',
+        'head.ctc_head.fc',
+    ]
+    backbone_targets = backbone_spatial_targets(model, stages=backbone_stages)
+
+    # inject WITHOUT freezing yet (freeze once at the end)
+    LoRAInjector.inject_lora(model, head_targets,     r=r_head,     alpha=alpha_head,
+                             dropout=dropout, freeze_backbone=False)
+    LoRAInjector.inject_lora(model, backbone_targets, r=r_backbone, alpha=alpha_backbone,
+                             dropout=dropout, freeze_backbone=False)
+
+    LoRAInjector.freeze_non_lora_parameters(model, unfreeze_norms=unfreeze_norms)
+    print(LoRAInjector.get_lora_stats(model))
+    return model
 def inject_lora_to_ppocr_v5(
     model: nn.Module,
     r: int = 8,
