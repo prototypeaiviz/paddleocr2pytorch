@@ -89,7 +89,7 @@ class NRTRDecodeImage(object):
         data['image'] = img
         return data
 
-
+# USED DET
 class NormalizeImage(object):
     """ normalize image such as substract mean, divide std
     """
@@ -116,7 +116,7 @@ class NormalizeImage(object):
             img.astype('float32') * self.scale - self.mean) / self.std
         return data
 
-
+# USED DET
 class ToCHWImage(object):
     """ convert hwc image to chw image
     """
@@ -144,7 +144,7 @@ class Fasttext(object):
         data['fast_label'] = fast_label
         return data
 
-
+# USED DET
 class KeepKeys(object):
     def __init__(self, keep_keys, **kwargs):
         self.keep_keys = keep_keys
@@ -183,7 +183,7 @@ class Resize(object):
         data['polys'] = np.array(new_boxes, dtype=np.float32)
         return data
 
-
+# USED DET
 class DetResizeForTest(object):
     def __init__(self, **kwargs):
         super(DetResizeForTest, self).__init__()
