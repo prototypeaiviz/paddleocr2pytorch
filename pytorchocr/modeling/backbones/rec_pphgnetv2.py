@@ -1142,11 +1142,11 @@ class PaddingSameAsPaddleMaxPool2d(torch.nn.Module):
         pad_needed_w = extended_w - w
 
         # STEP 5: Make sure it's not negative
-        pad_w_total = max(0, pad_needed_w)
-        pad_h = pad_h_total // 2
-        pad_w = pad_w_total // 2
-        # The padding format is [left, right, top, bottom] in PyTorch.
-        x = torch.nn.functional.pad(x, [pad_w, pad_w_total - pad_w, pad_h, pad_h_total - pad_h])
+        # pad_w_total = max(0, pad_needed_w)
+        pad_h = self.kernel_size - 1
+        pad_w = self.kernel_size - 1
+        x = torch.nn.functional.pad(x, [pad_w // 2, pad_w - pad_w // 2,
+                                         pad_h // 2, pad_h - pad_h // 2])
         return self.pool(x)
 
 class StemBlock(TheseusLayer):
