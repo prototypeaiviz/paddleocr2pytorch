@@ -1,0 +1,7 @@
+python tools/infer/predict_rec.py --rec_model_path "/media/mostafahaggag/D/Projects_ubuntu/APPs/FULL_app/PaddleOCR-Pytorch/ptocr_v5_server_rec.pth" --rec_yaml_path                                                      
+  "/media/mostafahaggag/D/Projects_ubuntu/APPs/FULL_app/PaddleOCR-Pytorch/configs/rec/PP-OCRv5/PP-OCRv5_server_rec.yml" --rec_algorithm SVTR_LCNet --rec_image_shape "3,48,320" --rec_char_dict_path                       
+  "/media/mostafahaggag/D/Projects_ubuntu/APPs/FULL_app/PaddleOCR-Pytorch/dicts/ppocrv5_dict.txt" --use_space_char true --image_dir "/media/mostafahaggag/D/Data/Data_for_testing/recogntion"
+
+
+python tools/infer/predict_det.py --det_model_path "/media/mostafahaggag/D/Projects_ubuntu/APPs/FULL_app/PaddleOCR-Pytorch/ptocr_v5_server_det.pth" --det_yaml_path                                                      
+  "/media/mostafahaggag/D/Projects_ubuntu/APPs/FULL_app/PaddleOCR-Pytorch/configs/det/PP-OCRv5/PP-OCRv5_server_det.yml" --image_dir "/media/mostafahaggag/D/Data/Data_for_testing/detection"
