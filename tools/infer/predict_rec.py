@@ -18,17 +18,25 @@ from pytorchocr.utils.utility import get_image_file_list, check_and_read_gif
 
 class TextRecognizer(BaseOCRV20):
     def __init__(self, args, **kwargs):
+        # the size is always fixed 3,48,320
         self.rec_image_shape = [int(v) for v in args.rec_image_shape.split(",")]
+        # set as default ch , donot understand what does it do exactly
         self.character_type = args.rec_char_type
+        # batch num 6
         self.rec_batch_num = args.rec_batch_num
+        # SVTR_lcnRY
         self.rec_algorithm = args.rec_algorithm
+        # MAX LENGTH 25
         self.max_text_length = args.max_text_length
+        # use space is set to true
+        # using the default one and ignore the rest bellow
         postprocess_params = {
             'name': 'CTCLabelDecode',
             "character_type": args.rec_char_type,
             "character_dict_path": args.rec_char_dict_path,
             "use_space_char": args.use_space_char
         }
+        # ignored
         if self.rec_algorithm == "SRN":
             postprocess_params = {
                 'name': 'SRNLabelDecode',
@@ -78,18 +86,21 @@ class TextRecognizer(BaseOCRV20):
 
         use_gpu = args.use_gpu
         self.use_gpu = torch.cuda.is_available() and use_gpu
-
+        # max width 1280
         self.limited_max_width = args.limited_max_width
+        # min width 16
         self.limited_min_width = args.limited_min_width
-
+        # path  of the weights
         self.weights_path = args.rec_model_path
+        # path of the yaml
         self.yaml_path = args.rec_yaml_path
-
+        # total number of characters
         char_num = len(getattr(self.postprocess_op, 'character'))
         network_config = utility.AnalysisConfig(self.weights_path, self.yaml_path, char_num)
         weights = self.read_pytorch_weights(self.weights_path)
-
+        # output channel 120
         self.out_channels = self.get_out_channels(weights)
+        # some special cases
         if self.rec_algorithm == 'NRTR':
             self.out_channels = list(weights.values())[-1].numpy().shape[0]
         elif self.rec_algorithm == 'SAR':
@@ -308,7 +319,7 @@ class TextRecognizer(BaseOCRV20):
 
         # rec_res = []
         rec_res = [['', 0.0]] * img_num
-        batch_num = self.rec_batch_num
+        batch_num = self.rec_batch_num# my current batch size
         elapse = 0
         for beg_img_no in range(0, img_num, batch_num):
             end_img_no = min(img_num, beg_img_no + batch_num)
@@ -318,6 +329,7 @@ class TextRecognizer(BaseOCRV20):
                 # h, w = img_list[ino].shape[0:2]
                 h, w = img_list[indices[ino]].shape[0:2]
                 wh_ratio = w * 1.0 / h
+                # get the max wh ratio
                 max_wh_ratio = max(max_wh_ratio, wh_ratio)
             for ino in range(beg_img_no, end_img_no):
                 if self.rec_algorithm == "SAR":
@@ -359,6 +371,7 @@ class TextRecognizer(BaseOCRV20):
                     norm_img_mask_batch.append(norm_image_mask)
                     word_label_list.append(word_label)
                 else:
+                    # we are in this case
                     norm_img = self.resize_norm_img(img_list[indices[ino]],
                                                     max_wh_ratio)
                     norm_img = norm_img[np.newaxis, :]
@@ -424,6 +437,7 @@ class TextRecognizer(BaseOCRV20):
                 preds = outputs
 
             else:
+                # we are this case
                 starttime = time.time()
 
                 with torch.no_grad():

@@ -33,9 +33,13 @@ def build_post_process(config, global_config=None):
 
     config = copy.deepcopy(config)
     module_name = config.pop('name')
+    # we are the case of CTCLabelDecode
     if global_config is not None:
         config.update(global_config)
     assert module_name in support_dict, Exception(
         'post process only support {}, but got {}'.format(support_dict, module_name))
     module_class = eval(module_name)(**config)
+    # {'character_type': 'ch',
+    # 'character_dict_path': '/media/mostafahaggag/D/Projects_ubuntu/APPs/FULL_app/PaddleOCR-Pytorch/dicts/ppocrv5_dict.txt',
+    # 'use_space_char': True}
     return module_class
