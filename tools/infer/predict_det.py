@@ -22,10 +22,11 @@ class TextDetector(BaseOCRV20):
     def __init__(self, args, **kwargs):
         self.args = args
         self.det_algorithm = args.det_algorithm
+        #
         pre_process_list = [{
             'DetResizeForTest': {
-                'limit_side_len': args.det_limit_side_len,
-                'limit_type': args.det_limit_type,
+                'limit_side_len': args.det_limit_side_len,#960
+                'limit_type': args.det_limit_type,#max
             }
         }, {
             'NormalizeImage': {
@@ -42,14 +43,15 @@ class TextDetector(BaseOCRV20):
             }
         }]
         postprocess_params = {}
+        # used
         if self.det_algorithm == "DB":
             postprocess_params['name'] = 'DBPostProcess'
-            postprocess_params["thresh"] = args.det_db_thresh
-            postprocess_params["box_thresh"] = args.det_db_box_thresh
+            postprocess_params["thresh"] = args.det_db_thresh# set to 0.3
+            postprocess_params["box_thresh"] = args.det_db_box_thresh# set to 0.6
             postprocess_params["max_candidates"] = 1000
-            postprocess_params["unclip_ratio"] = args.det_db_unclip_ratio
-            postprocess_params["use_dilation"] = args.use_dilation
-            postprocess_params["score_mode"] = args.det_db_score_mode
+            postprocess_params["unclip_ratio"] = args.det_db_unclip_ratio # set to 1.5
+            postprocess_params["use_dilation"] = args.use_dilation # set to False
+            postprocess_params["score_mode"] = args.det_db_score_mode # set to fast
         elif self.det_algorithm == "DB++":
             postprocess_params['name'] = 'DBPostProcess'
             postprocess_params["thresh"] = args.det_db_thresh
@@ -113,8 +115,9 @@ class TextDetector(BaseOCRV20):
         else:
             print("unknown det_algorithm:{}".format(self.det_algorithm))
             sys.exit(0)
-
+        # use the default one
         self.preprocess_op = create_operators(pre_process_list)
+        #
         self.postprocess_op = build_post_process(postprocess_params)
 
         use_gpu = args.use_gpu
@@ -158,7 +161,7 @@ class TextDetector(BaseOCRV20):
             points[pno, 0] = int(min(max(points[pno, 0], 0), img_width - 1))
             points[pno, 1] = int(min(max(points[pno, 1], 0), img_height - 1))
         return points
-
+    # used
     def filter_tag_det_res(self, dt_boxes, image_shape):
         img_height, img_width = image_shape[0:2]
         dt_boxes_new = []
@@ -187,7 +190,7 @@ class TextDetector(BaseOCRV20):
         data = {'image': img}
 
         st = time.time()
-
+        # apply the transform
         data = transform(data, self.preprocess_op)
         img, shape_list = data
         if img is None:
@@ -212,6 +215,7 @@ class TextDetector(BaseOCRV20):
             preds['f_tco'] = outputs['f_tco'].cpu().numpy()
             preds['f_tvo'] = outputs['f_tvo'].cpu().numpy()
         elif self.det_algorithm in ['DB', 'PSE', 'DB++']:
+            # used
             preds['maps'] = outputs['maps'].cpu().numpy()
         elif self.det_algorithm == 'FCE':
             for i, (k, output) in enumerate(outputs.items()):
@@ -227,6 +231,7 @@ class TextDetector(BaseOCRV20):
                                        self.postprocess_op.box_type == 'poly'):
             dt_boxes = self.filter_tag_det_res_only_clip(dt_boxes, ori_im.shape)
         else:
+            # used
             dt_boxes = self.filter_tag_det_res(dt_boxes, ori_im.shape)
 
         et = time.time()
@@ -333,6 +338,7 @@ class TextDetector(BaseOCRV20):
                         )
                 elapse += sub_elapse
         else:
+            # used
             dt_boxes, elapse = self.predict(img)
         return dt_boxes, elapse
 
